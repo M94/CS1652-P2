@@ -117,16 +117,19 @@ int main(int argc, char * argv[]) {
 			cout << "MUX: ";
 	    	/* Packet class includes methods for extracting portions of the payload */
 			Packet p;	// Consists of a list of packet Headers, a Buffer that represents the payload of the packet, and a list of packet Trailers
+			Packet p_send;
 			unsigned short len;	// Packet length
 			bool checksumok;
 			TCPHeader tcp_header; // TCPHeader - wraps the raw data of a TCP header into a convenient abstraction
 			IPHeader ip_header;	// IPHeader - provides convenient access to the fields of an IPv4 header
+			SockRequestResponse request;
+			SockRequestResponse response;
 
 			// However, it is possible to extract raw data from the headers, payload, and trailers of a packet
 			MinetReceive(mux,p);
 
 			// The size of a TCP Header is 20 bytes.. I think
-			p.ExtractHeaderFromPayload<TCPHeader>(20);
+			p.ExtractHeaderFromPayload<TCPHeader>(TCPHeader :: EstimateTCPHeaderLength(p));
 
 			// virtual Header FindHeader(Headers::HeaderType ht) const;
 			tcp_header = p.FindHeader(Headers :: TCPHeader);
@@ -167,6 +170,7 @@ int main(int argc, char * argv[]) {
 						cout << "Sending ack...\n";
 						unsigned char flags = 0;
 						SET_ACK(flags);
+						SET_SYN(flags);
 						Packet ack_packet = createPacket(connstate, 0, flags);
 						MinetSend(mux, ack_packet);
 					}
@@ -179,12 +183,23 @@ int main(int argc, char * argv[]) {
 						cout << "Ack acknowledged.\n";
 						// Update state
 						connstate.state.SetState(ESTABLISHED);
+						
+						//response.
 					}
 					break;
 				}
 				// Represents waiting for a matching conn request after having sent one
 				case SYN_SENT: {
 					cout << "SYN_SENT\n";
+					if(IS_SYN(tcp_flags) && IS_ACK(tcp_flags)) {
+						unsigned char flags = 0;
+						SET_ACK(flags);
+						p_send = createPacket(connstate, 0, flags);
+						MinetSend(mux, p_send);
+						connstate.state.SetState(ESTABLISHED);
+						// 
+					}
+
 					break;
 				}
 
@@ -242,12 +257,10 @@ int main(int argc, char * argv[]) {
 					Packet p;
 				
 					ConnectionToStateMapping<TCPState> mapping;
-
 					// TCPState: LISTEN, SYN_RCVD, SYN_SENT, SYN_SENT1, ESTABLISHED, SEND_DATA, CLOSE_WAIT, FIN_WAIT1, CLOSING, LAST_ACK, DIN_WAIT2, TIME_WAIT
 					// Note: TCP states represent the state AFTER the departure or arrival of the segment (RFC 793)
 					// TCPState(unsigned int initialSequenceNum, unsigned int state, unsigned int timertries)
 					TCPState next_tcp_state = TCPState(1, SYN_SENT, 3); // What to assign to timertries? Just put 3 because 3 way handshake l0l
-
 					Packet packet_to_send;
 					*/
 					break;
