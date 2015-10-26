@@ -115,7 +115,7 @@ int main(int argc, char * argv[]) {
 	    if (event.handle == mux) {
 		/* Handle IP packet */
 			cout << "MUX: ";
-			
+
 			Packet p;	// Consists of a list of packet Headers, a Buffer that represents the payload of the packet, and a list of packet Trailers
 			Packet p_send;
 			unsigned short len;	// Packet length
@@ -126,6 +126,9 @@ int main(int argc, char * argv[]) {
 			SockRequestResponse response;
 			unsigned int seq;
 			unsigned int ack;
+			unsigned char tcp_header_len;
+			unsigned char ip_header_len;
+
 
 			// However, it is possible to extract raw data from the headers, payload, and trailers of a packet
 			MinetReceive(mux,p);
@@ -145,6 +148,13 @@ int main(int argc, char * argv[]) {
 
 			// bool IsCorrectChecksum(const Packet &p) const;
 			checksumok = tcp_header.IsCorrectChecksum(p);
+
+			// Length of data is total minus headers
+			ip_header.GetTotalLength(len);
+			ip_header.GetHeaderLength(ip_header_len);
+			tcp_header.GetHeaderLen(tcp_header_len);
+			len = len - ip_header_len - tcp_header_len;
+			Buffer buffer = p.GetPayload().ExtractFront(len);
 
 			Connection conn;
 			// ConnectionList stores a list (queue) of ConnectionToStateMappings
@@ -190,6 +200,9 @@ int main(int argc, char * argv[]) {
 						connstate.state.SetLastAcked(ack);
 						
 						//response
+						response.type = STATUS;
+						response.connection = conn;
+						MinetSend(sock, response);
 					}
 					break;
 				}
@@ -199,10 +212,13 @@ int main(int argc, char * argv[]) {
 					if(IS_SYN(tcp_flags) && IS_ACK(tcp_flags)) {
 						unsigned char flags = 0;
 						SET_ACK(flags);
+						// Ack packet
 						p_send = createPacket(connstate, 0, flags);
 						MinetSend(mux, p_send);
 						connstate.state.SetState(ESTABLISHED);
-						// 
+						//
+						SockRequestResponse write (WRITE, connstate.connection, buffer, 0, EOK);
+						MinetSend(sock, write);
 					}
 
 					break;
