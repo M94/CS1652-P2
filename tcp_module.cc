@@ -100,7 +100,7 @@ int main(int argc, char * argv[]) {
 	return -1;
     }
     
-    cerr << "tcp_module auc5 handling tcp traffic.......\n";
+    cerr << "tcp_module auc5|cmn26 handling tcp traffic.......\n";
 
     MinetSendToMonitor(MinetMonitoringEvent("tcp_module auc5|cmn26 handling tcp traffic........"));
 
@@ -114,7 +114,7 @@ int main(int argc, char * argv[]) {
 	    
 	    if (event.handle == mux) {
 		/* Handle IP packet */
-
+			cout << "MUX: ";
 	    	/* Packet class includes methods for extracting portions of the payload */
 			Packet p;	// Consists of a list of packet Headers, a Buffer that represents the payload of the packet, and a list of packet Trailers
 			unsigned short len;	// Packet length
@@ -149,6 +149,11 @@ int main(int argc, char * argv[]) {
 			unsigned int current_tcp_state = (connstate).state.GetState();
 
 			switch(current_tcp_state) {
+				
+				case CLOSED: {
+					cout << "CLOSED\n";
+					break;
+				}
 				// Waiting connection request from any remote TCP & port
 				// Handle passive open
 				case LISTEN: {
@@ -224,15 +229,16 @@ int main(int argc, char * argv[]) {
 
 	    if (event.handle == sock) {
 		/* Handle socket request or response */
+			cout << "SOCK: ";
 			SockRequestResponse request;
 			SockRequestResponse response;
 
 			MinetReceive(sock, request);
 			switch (request.type) {
 				case CONNECT: {
+					
+					cout << "CONNECT\n";
 					/*
-					cerr << "CONNECT\n";
-				
 					Packet p;
 				
 					ConnectionToStateMapping<TCPState> mapping;
@@ -247,24 +253,28 @@ int main(int argc, char * argv[]) {
 					break;
 				}
 
-				case ACCEPT:
-				cerr << "ACCEPT\n";
+				case ACCEPT: {
+					cout << "ACCEPT\n";
+					TCPState tcp_state(rand(), LISTEN, 3);
+					ConnectionToStateMapping<TCPState> tcp_mapping(request.connection, Time(), tcp_state, false);
+					clist.push_front(tcp_mapping);
 					break;
+				}
 				case STATUS:
-				cerr << "STATUS\n";
-				  // ignored, no response needed
-				  break;
+					cout << "STATUS\n";
+					// ignored, no response needed
+					break;
 				case WRITE:
-				cerr << "WRITE\n";
-				  break;
+					cout << "WRITE\n";
+					break;
 				case FORWARD:
-				cerr << "FORWARD\n";
+					cout << "FORWARD\n";
 					break;
 				case CLOSE:
-				cerr << "CLOSE\n";
+					cout << "CLOSE\n";
 					break;
 				default:
-				cerr << "SOCK REQ/RESP\n";
+					cout << "SOCK REQ/RESP\n";
 			}			
 	    }
 	}
