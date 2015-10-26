@@ -115,7 +115,7 @@ int main(int argc, char * argv[]) {
 	    if (event.handle == mux) {
 		/* Handle IP packet */
 			cout << "MUX: ";
-	    	/* Packet class includes methods for extracting portions of the payload */
+			
 			Packet p;	// Consists of a list of packet Headers, a Buffer that represents the payload of the packet, and a list of packet Trailers
 			Packet p_send;
 			unsigned short len;	// Packet length
@@ -124,6 +124,8 @@ int main(int argc, char * argv[]) {
 			IPHeader ip_header;	// IPHeader - provides convenient access to the fields of an IPv4 header
 			SockRequestResponse request;
 			SockRequestResponse response;
+			unsigned int seq;
+			unsigned int ack;
 
 			// However, it is possible to extract raw data from the headers, payload, and trailers of a packet
 			MinetReceive(mux,p);
@@ -138,6 +140,8 @@ int main(int argc, char * argv[]) {
 			// TCP header vars
 			unsigned char tcp_flags;
 			tcp_header.GetFlags(tcp_flags);
+			tcp_header.GetSeqNum(seq);
+			tcp_header.GetAckNum(ack);
 
 			// bool IsCorrectChecksum(const Packet &p) const;
 			checksumok = tcp_header.IsCorrectChecksum(p);
@@ -183,8 +187,9 @@ int main(int argc, char * argv[]) {
 						cout << "Ack acknowledged.\n";
 						// Update state
 						connstate.state.SetState(ESTABLISHED);
+						connstate.state.SetLastAcked(ack);
 						
-						//response.
+						//response
 					}
 					break;
 				}
