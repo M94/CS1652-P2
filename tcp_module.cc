@@ -95,27 +95,30 @@ int main(int argc, char * argv[]) {
 
 	    if (event.handle == sock) {
 		/* Handle socket request or response */
-			SockRequestResponse req
+			SockRequestResponse req;
 			MinetReceive(sock, req);
 			switch (req.type) {
 				case CONNECT:
-				
+				cerr << "CONNECT\n";
 					break;
 				case ACCEPT:
-
+				cerr << "ACCEPT\n";
 					break;
 				case STATUS:
+				cerr << "STATUS\n";
 				  // ignored, no response needed
 				  break;
 				case WRITE:
+				cerr << "WRITE\n";
 				  break;
 				case FORWARD:
-				  
+				cerr << "FORWARD\n";
 					break;
 				case CLOSE:
+				cerr << "CLOSE\n";
 					break;
 				default:
-
+				cerr << "SOCK REQ/RESP\n";
 			}			
 	    }
 	}
