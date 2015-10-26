@@ -99,17 +99,11 @@ int main(int argc, char * argv[]) {
 			MinetReceive(sock, req);
 			switch (req.type) {
 				case CONNECT:
+				
+					break;
 				case ACCEPT:
-				  { // ignored, send OK response
-					SockRequestResponse repl;
-					repl.type=STATUS;
-					repl.connection=req.connection;
-					// buffer is zero bytes
-					repl.bytes=0;
-					repl.error=EOK;
-					MinetSend(sock,repl);
-				  }
-				  break;
+
+					break;
 				case STATUS:
 				  // ignored, no response needed
 				  break;
@@ -121,10 +115,7 @@ int main(int argc, char * argv[]) {
 				case CLOSE:
 					break;
 				default:
-					SockRequestResponse repl;
-					repl.type=STATUS;
-					repl.error=EWHAT;
-					MinetSend(sock,repl);
+
 			}			
 	    }
 	}
