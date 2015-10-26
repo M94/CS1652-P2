@@ -27,8 +27,12 @@ Project 2
 
 #include "Minet.h"
 
+// New imports
+#include "tcpstate.h"
+
 using namespace std;
 
+/*
 struct TCPState {
     // need to write this
     std::ostream & Print(std::ostream &os) const { 
@@ -36,6 +40,32 @@ struct TCPState {
 	return os;
     }
 };
+*/
+
+Packet createPacket(ConnectionToStateMapping<TCPState> &a_mapping, int payload_size, char flags) {
+	Packet p;
+	IPHeader ip;
+	TCPHeader tcp;
+	int packet_size = payload_size + TCP_HEADER_BASE_LENGTH + IP_HEADER_BASE_LENGTH;
+	
+	// Set IP header
+	ip.SetProtocol(IP_PROTO_TCP);
+	ip.SetTotalLength(packet_size);
+	ip.SetSourceIP(a_mapping.connection.src);
+	ip.SetDestIP(a_mapping.connection.dest);
+	p.PushFrontHeader(ip);
+	
+	// Set TCP header
+	tcp.SetHeaderLen(TCP_HEADER_BASE_LENGTH, p);
+	tcp.SetWinSize(a_mapping.state.GetN(), p);
+	tcp.SetAckNum(a_mapping.state.GetLastRecvd(), p);
+    tcp.SetSeqNum(a_mapping.state.GetLastAcked() + 1, p);
+	tcp.SetSourcePort(a_mapping.connection.srcport, p);
+	tcp.SetDestPort(a_mapping.connection.destport, p);
+	tcp.RecomputeChecksum(p);
+	p.PushBackHeader(tcp);
+	return p;
+}
 
 
 int main(int argc, char * argv[]) {
@@ -72,7 +102,7 @@ int main(int argc, char * argv[]) {
     
     cerr << "tcp_module auc5 handling tcp traffic.......\n";
 
-    MinetSendToMonitor(MinetMonitoringEvent("tcp_module auc5 handling tcp traffic........"));
+    MinetSendToMonitor(MinetMonitoringEvent("tcp_module auc5|cmn26 handling tcp traffic........"));
 
     MinetEvent event;
     double timeout = 1;
@@ -101,6 +131,10 @@ int main(int argc, char * argv[]) {
 			// virtual Header FindHeader(Headers::HeaderType ht) const;
 			tcp_header = p.FindHeader(Headers :: TCPHeader);
 			ip_header = p.FindHeader(Headers :: IPHeader);
+			
+			// TCP header vars
+			unsigned char tcp_flags;
+			tcp_header.GetFlags(tcp_flags);
 
 			// bool IsCorrectChecksum(const Packet &p) const;
 			checksumok = tcp_header.IsCorrectChecksum(p);
@@ -115,15 +149,37 @@ int main(int argc, char * argv[]) {
 			unsigned int current_tcp_state = (connstate).state.GetState();
 
 			switch(current_tcp_state) {
+				// Waiting connection request from any remote TCP & port
+				// Handle passive open
 				case LISTEN: {
+					cout << "LISTEN\n";
+					if (IS_SYN(tcp_flags)) {
+						cout << "Conn request received.\n";
+						// Update state
+						connstate.state.SetState(SYN_RCVD);
+						connstate.connection = conn;
+						// Send SYN ACK
+						cout << "Sending ack...\n";
+						unsigned char flags = 0;
+						SET_ACK(flags);
+						Packet ack_packet = createPacket(connstate, 0, flags);
+						MinetSend(mux, ack_packet);
+					}
 					break;
 				}
-
+				// Waiting for an ack after having both received & sent a conn req
 				case SYN_RCVD: {
+					cout << "SYN_RCVD\n";
+					if (IS_ACK(tcp_flags)) {
+						cout << "Ack acknowledged.\n";
+						// Update state
+						connstate.state.SetState(ESTABLISHED);
+					}
 					break;
 				}
-
+				// Represents waiting for a matching conn request after having sent one
 				case SYN_SENT: {
+					cout << "SYN_SENT\n";
 					break;
 				}
 
