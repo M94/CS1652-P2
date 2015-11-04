@@ -71,9 +71,9 @@ Packet createPacket(ConnectionToStateMapping<TCPState> &a_mapping, int payload_s
 */
 Packet createPacket(const Connection conn, const int payload_size, const char flags) {
 	Packet p;
-	IPHeader ip;
-	TCPHeader tcp;
 	int packet_size = payload_size + TCP_HEADER_BASE_LENGTH + IP_HEADER_BASE_LENGTH;
+	TCPHeader tcp;
+	IPHeader ip;	
 	cout << "Creating " << packet_size << " B packet...\n";
 	// Set IP header
 	try 
@@ -82,7 +82,7 @@ Packet createPacket(const Connection conn, const int payload_size, const char fl
 		ip.SetTotalLength(packet_size);
 		ip.SetSourceIP(conn.src);
 		ip.SetDestIP(conn.dest);
-		p.PushFrontHeader(ip);		
+		p.PushFrontHeader(ip);	
 		
 	} 
 	catch (exception& e) 
@@ -92,15 +92,15 @@ Packet createPacket(const Connection conn, const int payload_size, const char fl
 	// Set TCP header
 	try
 	{
-		tcp.SetHeaderLen(TCP_HEADER_BASE_LENGTH, p);
+		tcp.SetHeaderLen(5, p);
 		tcp.SetWinSize(3, p);
-		tcp.SetAckNum(0, p);
+		tcp.SetAckNum(1, p);
 		tcp.SetSeqNum(100, p);
 		tcp.SetSourcePort(conn.srcport, p);
 		tcp.SetDestPort(conn.destport, p);
 		tcp.SetFlags(flags, p);
-		tcp.RecomputeChecksum(p);
-		p.PushBackHeader(tcp);			
+		tcp.RecomputeChecksum(p);	
+		p.PushBackHeader(tcp);		
 	} catch (exception& e)
 	{
 		cout << "Error setting TCP header on packet:" << '\n' << e.what() << '\n';
@@ -116,7 +116,11 @@ struct PacketInfo {
 	unsigned char tcp_header_len;
 	unsigned char ip_header_len;
 	unsigned short buffer_len;
-	unsigned short total_len;	
+	unsigned short total_len;
+	unsigned short src_port;
+	unsigned short dest_port;	
+	IPAddress src_ip;
+	IPAddress dest_ip;
 	Buffer buffer;
 	PacketInfo(Packet &p) {
 		// Extract headers (temporary)
@@ -127,6 +131,11 @@ struct PacketInfo {
 		tcp_header.GetFlags(flags);
 		tcp_header.GetSeqNum(seq);
 		tcp_header.GetAckNum(ack);
+		tcp_header.GetSourcePort(src_port);
+		tcp_header.GetDestPort(dest_port);
+		// Read IP vars
+		ip_header.GetSourceIP(src_ip);
+		ip_header.GetDestIP(dest_ip);
 		// Read length vars
 		ip_header.GetTotalLength(total_len);
 		ip_header.GetHeaderLength(ip_header_len);
@@ -136,6 +145,24 @@ struct PacketInfo {
 		buffer = p.GetPayload().ExtractFront(buffer_len);	
 	} 
 };
+
+void printPacketInfo(char * name, PacketInfo pi) {
+	cout << name << "\n---------------\n";
+	// Print #
+	cout << "SEQ: " << pi.seq << " ACK: " << pi.ack << endl;
+	// Print flags
+	cout << "Flags: ";
+	if  (IS_SYN(pi.flags)|| IS_ACK(pi.flags)) {
+		if (IS_SYN(pi.flags)) cout << "SYN";	
+		if (IS_ACK(pi.flags)) cout << "ACK";
+	} else if (pi.flags == 0) cout << "NONE";
+	else cout << "N/A";
+	cout << endl;
+	// Print IP & ports
+	cout << "SRC: " << pi.src_ip << ":" << pi.src_port << endl; 
+	cout << "DEST: " << pi.dest_ip << ":" << pi.dest_port << endl; 
+	cout << "---------------\n";
+}
 
 
 int main(int argc, char * argv[]) {
@@ -168,7 +195,7 @@ int main(int argc, char * argv[]) {
     MinetEvent event;
     double timeout = 1;
 
-	/* Hard-coded connection */
+	/* Single connection */
 	IPAddress src_ip("192.168.102.5");
 	IPAddress dest_ip("192.168.102.5");
 	unsigned short src_port = 5050;
@@ -185,7 +212,6 @@ int main(int argc, char * argv[]) {
 	    
 	    if (event.handle == mux) {
 		/* Handle IP packet */
-			cout << "MUX: ";
 
 			Packet p;	
 			Packet p_send;
@@ -196,6 +222,8 @@ int main(int argc, char * argv[]) {
 			MinetReceive(mux,p);
 			// Pass contents of packet into convenient struct
 			PacketInfo p_in(p);
+			// Print contents of packet
+			printPacketInfo("Incoming packet", p_in);
 
 		  // ConnectionList stores a list (queue) of ConnectionToStateMappings
 			/*
@@ -211,19 +239,21 @@ int main(int argc, char * argv[]) {
 			switch(current_tcp_state) {
 				
 				case CLOSED: {
-					cout << "CLOSED\n";
+					cout << "MUX: CLOSED\n";
 					break;
 				}
 				// Waiting connection request from any remote TCP & port
 				// Handle passive open
 				case LISTEN: {
-					cout << "LISTEN\n";
+					cout << "MUX: LISTEN\n";
 					if (IS_SYN(p_in.flags)) {
 						cout << "Conn request received.\n";
 						// Update state
 						//connstate.state.SetState(SYN_RCVD);
 						//connstate.connection = conn;
 						current_tcp_state = SYN_RCVD;
+						// Update connection
+						conn.dest = p_in.dest_ip;
 						// Send SYN ACK
 						cout << "Sending ack...\n";
 						unsigned char flags = 0;
@@ -236,7 +266,7 @@ int main(int argc, char * argv[]) {
 				}
 				// Waiting for an ack after having both received & sent a conn req (host)
 				case SYN_RCVD: {
-					cout << "SYN_RCVD\n";
+					cout << "MUX: SYN_RCVD\n";
 					if (IS_ACK(p_in.flags)) {
 						cout << "Ack acknowledged.\n";
 						// Update state
@@ -253,7 +283,7 @@ int main(int argc, char * argv[]) {
 				}
 				// Represents waiting for a matching conn request after having sent one (client)
 				case SYN_SENT: {
-					cout << "SYN_SENT\n";
+					cout << "MUX: SYN_SENT\n";
 					if(IS_SYN(p_in.flags) && IS_ACK(p_in.flags)) {
 						unsigned char flags = 0;
 						SET_ACK(flags);
@@ -313,14 +343,13 @@ int main(int argc, char * argv[]) {
 
 	    if (event.handle == sock) {
 		/* Handle socket request or response */
-			cout << "SOCK: ";
 			SockRequestResponse request;
 			SockRequestResponse response;
 
 			MinetReceive(sock, request);
 			switch (request.type) {
 				case CONNECT: {
-					cout << "CONNECT\n";
+					cout << "SOCK: CONNECT\n";
 					/*
 					Packet p;
 					ConnectionToStateMapping<TCPState> mapping;
@@ -333,7 +362,7 @@ int main(int argc, char * argv[]) {
 					break;
 				}
 				case ACCEPT: {
-					cout << "ACCEPT\n";
+					cout << "SOCK: ACCEPT\n";
 					/*
 					TCPState tcp_state(0, LISTEN, 3);
 					ConnectionToStateMapping<TCPState> tcp_mapping(request.connection, Time(), tcp_state, false);
@@ -342,17 +371,17 @@ int main(int argc, char * argv[]) {
 					break;
 				}
 				case STATUS:
-					cout << "STATUS\n";
+					cout << "SOCK: STATUS\n";
 					// ignored, no response needed
 					break;
 				case WRITE:
-					cout << "WRITE\n";
+					cout << "SOCK: WRITE\n";
 					break;
 				case FORWARD:
-					cout << "FORWARD\n";
+					cout << "SOCK: FORWARD\n";
 					break;
 				case CLOSE:
-					cout << "CLOSE\n";
+					cout << "SOCK: CLOSE\n";
 					break;
 				default:
 					cout << "SOCK REQ/RESP\n";
