@@ -28,8 +28,13 @@ Project 2
 #include "Minet.h"
 
 // New imports
-#include "tcpstate.h"
 #include <exception>
+#include "tcp.h"
+#include "ip.h"
+#include "buffer.h"
+#include "packet.h"
+#include "tcpstate.h"
+#include "constate.h"
 
 using namespace std;
 
@@ -43,72 +48,7 @@ struct TCPState {
 };
 */
 
-/*
-Packet createPacket(ConnectionToStateMapping<TCPState> &a_mapping, int payload_size, char flags) {
-	Packet p;
-	IPHeader ip;
-	TCPHeader tcp;
-	int packet_size = payload_size + TCP_HEADER_BASE_LENGTH + IP_HEADER_BASE_LENGTH;
-	
-	// Set IP header
-	ip.SetProtocol(IP_PROTO_TCP);
-	ip.SetTotalLength(packet_size);
-	ip.SetSourceIP(a_mapping.connection.src);
-	ip.SetDestIP(a_mapping.connection.dest);
-	p.PushFrontHeader(ip);
-	
-	// Set TCP header
-	tcp.SetHeaderLen(TCP_HEADER_BASE_LENGTH, p);
-	tcp.SetWinSize(a_mapping.state.GetN(), p);
-	tcp.SetAckNum(a_mapping.state.GetLastRecvd(), p);
-	tcp.SetSeqNum(a_mapping.state.GetLastAcked() + 1, p);
-	tcp.SetSourcePort(a_mapping.connection.srcport, p);
-	tcp.SetDestPort(a_mapping.connection.destport, p);
-	tcp.RecomputeChecksum(p);
-	p.PushBackHeader(tcp);
-	return p;
-}
-*/
-Packet createPacket(const Connection conn, const int payload_size, const char flags) {
-	Packet p;
-	int packet_size = payload_size + TCP_HEADER_BASE_LENGTH + IP_HEADER_BASE_LENGTH;
-	TCPHeader tcp;
-	IPHeader ip;	
-	cout << "Creating " << packet_size << " B packet...\n";
-	// Set IP header
-	try 
-	{
-		ip.SetProtocol(IP_PROTO_TCP);
-		ip.SetTotalLength(packet_size);
-		ip.SetSourceIP(conn.src);
-		ip.SetDestIP(conn.dest);
-		p.PushFrontHeader(ip);	
-		
-	} 
-	catch (exception& e) 
-	{
-		 cout << "Error setting IP header on packet:" << '\n' << e.what() << '\n';
-	}
-	// Set TCP header
-	try
-	{
-		tcp.SetHeaderLen(5, p);
-		tcp.SetWinSize(3, p);
-		tcp.SetAckNum(1, p);
-		tcp.SetSeqNum(100, p);
-		tcp.SetSourcePort(conn.srcport, p);
-		tcp.SetDestPort(conn.destport, p);
-		tcp.SetFlags(flags, p);
-		tcp.RecomputeChecksum(p);	
-		p.PushBackHeader(tcp);		
-	} catch (exception& e)
-	{
-		cout << "Error setting TCP header on packet:" << '\n' << e.what() << '\n';
-	}
-	
-	return p;
-}
-
+// Extracts data from IP and TCP header and stores it in a struct
 struct PacketInfo {
 	unsigned int seq;
 	unsigned int ack;
@@ -121,47 +61,70 @@ struct PacketInfo {
 	unsigned short dest_port;	
 	IPAddress src_ip;
 	IPAddress dest_ip;
-	Buffer buffer;
-	PacketInfo(Packet &p) {
-		// Extract headers (temporary)
-		p.ExtractHeaderFromPayload<TCPHeader>(TCPHeader :: EstimateTCPHeaderLength(p));
-		TCPHeader tcp_header = p.FindHeader(Headers :: TCPHeader); 
-		IPHeader ip_header = p.FindHeader(Headers :: IPHeader);	
+	PacketInfo(IPHeader ip_header, TCPHeader tcp_header) {
 		// Read TCP vars
 		tcp_header.GetFlags(flags);
 		tcp_header.GetSeqNum(seq);
 		tcp_header.GetAckNum(ack);
 		tcp_header.GetSourcePort(src_port);
 		tcp_header.GetDestPort(dest_port);
+		tcp_header.GetHeaderLen(tcp_header_len);
 		// Read IP vars
 		ip_header.GetSourceIP(src_ip);
 		ip_header.GetDestIP(dest_ip);
-		// Read length vars
 		ip_header.GetTotalLength(total_len);
 		ip_header.GetHeaderLength(ip_header_len);
-		tcp_header.GetHeaderLen(tcp_header_len);
-		buffer_len = total_len - ip_header_len - tcp_header_len;
-		// Read buffer
-		buffer = p.GetPayload().ExtractFront(buffer_len);	
+		// buffer
+		buffer_len = total_len - tcp_header_len - ip_header_len;
 	} 
+	void print() {
+		cout << "---------------\n";
+		// Print #
+		cout << "SEQ: " << seq << " ACK: " << ack << endl;
+		// Print flags
+		cout << "FLAGS: ";
+		if  (IS_SYN(flags)|| IS_ACK(flags)) {
+			if (IS_SYN(flags)) cout << "SYN";	
+			if (IS_ACK(flags)) cout << "ACK";
+		} else if (flags == 0) cout << "NONE";
+		else cout << "N/A";
+		cout << endl;
+		// Print IP & ports
+		cout << "SRC: " << src_ip << ":" << src_port << endl; 
+		cout << "DEST: " << dest_ip << ":" << dest_port << endl; 
+		// Print lengths
+		cout << "TCP-LEN: " << (int) tcp_header_len << " IP-LEN: " << (int) ip_header_len << endl; 
+		cout << "BUFFER-LEN: " << buffer_len << " TOTAL-LEN: " << total_len << endl;
+		cout << "---------------\n";
+	}
 };
 
-void printPacketInfo(char * name, PacketInfo pi) {
-	cout << name << "\n---------------\n";
-	// Print #
-	cout << "SEQ: " << pi.seq << " ACK: " << pi.ack << endl;
-	// Print flags
-	cout << "Flags: ";
-	if  (IS_SYN(pi.flags)|| IS_ACK(pi.flags)) {
-		if (IS_SYN(pi.flags)) cout << "SYN";	
-		if (IS_ACK(pi.flags)) cout << "ACK";
-	} else if (pi.flags == 0) cout << "NONE";
-	else cout << "N/A";
-	cout << endl;
-	// Print IP & ports
-	cout << "SRC: " << pi.src_ip << ":" << pi.src_port << endl; 
-	cout << "DEST: " << pi.dest_ip << ":" << pi.dest_port << endl; 
-	cout << "---------------\n";
+Packet createPacket(Connection conn, Buffer buffer, char flags, unsigned int ack, unsigned int seq) {
+	Packet p(buffer);
+	int payload_size = buffer.GetSize();
+	int packet_size = payload_size + TCP_HEADER_BASE_LENGTH + IP_HEADER_BASE_LENGTH;
+	// Set IP header
+	IPHeader ip;
+	ip.SetProtocol(IP_PROTO_TCP);
+	ip.SetTotalLength(packet_size);
+	ip.SetSourceIP(conn.src); 		
+	ip.SetDestIP(conn.dest);			
+	p.PushFrontHeader(ip);
+	// Set TCP header
+	TCPHeader tcp;
+	tcp.SetWinSize(14600, p);
+	tcp.SetAckNum(ack, p);
+	tcp.SetSeqNum(seq, p);
+	tcp.SetSourcePort(conn.srcport, p);	
+	tcp.SetDestPort(conn.destport, p); 	
+	tcp.SetFlags(flags, p);
+	tcp.SetHeaderLen(5, p); // Header len in WORDS
+	tcp.RecomputeChecksum(p);
+	p.PushBackHeader(tcp);		
+	PacketInfo p_in(ip, tcp);
+	cout << "Created packet...\n";
+	p_in.print();
+	return p;
 }
 
 
@@ -193,17 +156,10 @@ int main(int argc, char * argv[]) {
     MinetSendToMonitor(MinetMonitoringEvent("tcp_module auc5|cmn26 handling tcp traffic........"));
 
     MinetEvent event;
-    double timeout = 1;
+    double timeout = 3;
 
-	/* Single connection */
-	IPAddress src_ip("192.168.102.5");
-	IPAddress dest_ip("192.168.102.5");
-	unsigned short src_port = 5050;
-	unsigned short dest_port = 5050;
-	unsigned char proto = IP_PROTO_TCP;
-	Connection conn(src_ip, dest_ip, src_port, dest_port, proto);
-	/* Single tcp state */
-	unsigned int current_tcp_state = LISTEN;
+    // ConnectionList stores a list (queue) of ConnectionToStateMappings
+    ConnectionList<TCPState> conn_list;
 
     while (MinetGetNextEvent(event, timeout) == 0) {
 
@@ -214,27 +170,41 @@ int main(int argc, char * argv[]) {
 		/* Handle IP packet */
 
 			Packet p;	
-			Packet p_send;
 			SockRequestResponse request;
 			SockRequestResponse response;
 			
 			// Get packet
 			MinetReceive(mux,p);
-			// Pass contents of packet into convenient struct
-			PacketInfo p_in(p);
-			// Print contents of packet
-			printPacketInfo("Incoming packet", p_in);
+			// Extract Headers
+			p.ExtractHeaderFromPayload<TCPHeader>(TCPHeader :: EstimateTCPHeaderLength(p));
+			TCPHeader p_tcp = p.FindHeader(Headers :: TCPHeader); 
+			p.ExtractHeaderFromPayload<IPHeader>(IPHeader :: EstimateIPHeaderLength(p));
+			IPHeader p_ip = p.FindHeader(Headers :: IPHeader);	
+			// Copy contents of packet into convenient struct
+			PacketInfo p_in(p_ip, p_tcp);
+			cout << "Received packet..." << endl;
+			p_in.print();
+			// Get connection from packet
+			Connection conn;
+			conn.src = p_in.dest_ip; // src = this machine
+			conn.dest = p_in.src_ip;
+			conn.srcport = p_in.dest_port;
+			conn.destport = p_in.src_port;
+			conn.protocol = IP_PROTO_TCP;
+			// Grab TCP state if existing connection
+			unsigned int current_tcp_state;
+			ConnectionList<TCPState> :: iterator conn_list_iterator = conn_list.FindMatching(conn);
+ 			ConnectionToStateMapping<TCPState> & conn2state = (*conn_list_iterator);
+			TCPState * tcp_state;
+			if (conn2state.Matches(conn)) {
+ 				tcp_state = &(conn2state).state;
+				current_tcp_state = tcp_state->GetState();
+			}
+			// Else set to LISTEN
+			else {
+				current_tcp_state = LISTEN;
+			} 
 
-		  // ConnectionList stores a list (queue) of ConnectionToStateMappings
-			/*
-		    Connection conn;
-			ConnectionList<TCPState> :: iterator connections_iterator = clist.FindMatching(conn);
-			ConnectionToStateMapping maps connection addresses to TCP connection state (TCPState)
-		    ConnectionToStateMapping<TCPState> & connstate = (*connections_iterator);
-			*/
-
-			// Grabs current TCP state
-			//unsigned int current_tcp_state = (connstate).state.GetState();
 
 			switch(current_tcp_state) {
 				
@@ -248,19 +218,20 @@ int main(int argc, char * argv[]) {
 					cout << "MUX: LISTEN\n";
 					if (IS_SYN(p_in.flags)) {
 						cout << "Conn request received.\n";
-						// Update state
-						//connstate.state.SetState(SYN_RCVD);
-						//connstate.connection = conn;
-						current_tcp_state = SYN_RCVD;
-						// Update connection
-						conn.dest = p_in.dest_ip;
+						// Add new conn-state mapping
+						TCPState new_state(p_in.seq, SYN_RCVD, 3);
+						tcp_state = &new_state;
+						ConnectionToStateMapping<TCPState> c2state(conn, Time(5), *tcp_state, true); 
+						conn_list.push_front(c2state);						
 						// Send SYN ACK
-						cout << "Sending ack...\n";
 						unsigned char flags = 0;
+						unsigned int ack = tcp_state->GetLastAcked() + 1;
+						Buffer b;
 						SET_ACK(flags);
 						SET_SYN(flags);
-						Packet ack = createPacket(conn, 0, flags);
-						MinetSend(mux, ack);
+						Packet ack_packet = createPacket(conn, b, flags, ack, 300);
+						MinetSend(mux, ack_packet); // First one discarded
+						MinetSend(mux, ack_packet);
 					}
 					break;
 				}
@@ -270,9 +241,8 @@ int main(int argc, char * argv[]) {
 					if (IS_ACK(p_in.flags)) {
 						cout << "Ack acknowledged.\n";
 						// Update state
-						//connstate.state.SetState(ESTABLISHED);
-						//connstate.state.SetLastAcked(ack);
-						current_tcp_state = ESTABLISHED;
+						conn2state.state.SetState(ESTABLISHED);
+						//conn_state.state.SetLastAcked(ack);
 						
 						//response
 						response.type = STATUS;
@@ -288,15 +258,15 @@ int main(int argc, char * argv[]) {
 						unsigned char flags = 0;
 						SET_ACK(flags);
 						// Ack packet
+						Buffer b;
 						//p_send = createPacket(connstate, 0, flags);
-						p_send = createPacket(conn, 0, flags);
-						MinetSend(mux, p_send);
+						//p_send = createPacket(conn, b, flags);
+						//MinetSend(mux, p_send);
 						// Update state
-						//connstate.state.SetState(ESTABLISHED);
-						current_tcp_state = ESTABLISHED;
+						conn2state.state.SetState(ESTABLISHED);
 						//SockRequestResponse write (WRITE, connstate.connection, buffer, 0, EOK);
-						//SockRequestResponse write (WRITE, conn, buffer, 0, EOK);
-						//MinetSend(sock, write);
+						SockRequestResponse write (WRITE, conn, b, 0, EOK);
+						MinetSend(sock, write);
 					}
 
 					break;
@@ -391,7 +361,7 @@ int main(int argc, char * argv[]) {
 
 	if (event.eventtype == MinetEvent::Timeout) {
 	    /* Handle timeout. Probably need to resend some packets */
-		//cerr << "Timeout!\n";
+		//cerr << "Timed out\n";
 	}
 
     }
