@@ -373,7 +373,6 @@ int main(int argc, char * argv[]) {
 					}
 					case STATUS:
 						cout << "SOCK: STATUS\n";
-						// ignored, no response needed
 						break;
 					case WRITE:
 						cout << "SOCK: WRITE\n";
