@@ -97,6 +97,19 @@ struct PacketInfo {
 		cout << "BUFFER-LEN: " << buffer_len << " TOTAL-LEN: " << total_len << endl;
 		cout << "---------------\n";
 	}
+	void printShort() {
+		cout << "---------------\n";
+		// Print #
+		cout << "SEQ: " << seq << " ACK: " << ack << endl;
+		// Print flags
+		cout << "FLAGS: ";
+		if  (IS_SYN(flags)|| IS_ACK(flags)) {
+			if (IS_SYN(flags)) cout << "SYN";	
+			if (IS_ACK(flags)) cout << "ACK";
+		} else if (flags == 0) cout << "NONE";
+		else cout << "N/A";
+		cout << "\n---------------\n";
+	}
 };
 
 Packet createPacket(Connection conn, Buffer buffer, char flags, unsigned int ack, unsigned int seq) {
@@ -123,10 +136,17 @@ Packet createPacket(Connection conn, Buffer buffer, char flags, unsigned int ack
 	p.PushBackHeader(tcp);		
 	PacketInfo p_in(ip, tcp);
 	cout << "Created packet...\n";
-	p_in.print();
+	p_in.printShort();
 	return p;
 }
 
+void printBuffer(Buffer &buffer) {
+	unsigned int size = buffer.GetSize();
+	char buf[size + 1];
+	buf[size] = '\0';
+	buffer.GetData(buf, size, 0);
+	cout << "Buffer: " << buf << endl;
+}
 
 int main(int argc, char * argv[]) {
 	/* Minet setup */
@@ -169,21 +189,24 @@ int main(int argc, char * argv[]) {
 	    if (event.handle == mux) {
 		/* Handle IP packet */
 
-			Packet p;	
+			Packet p;
+			Packet p_send;	
 			SockRequestResponse request;
-			SockRequestResponse response;
 			
 			// Get packet
 			MinetReceive(mux,p);
+
 			// Extract Headers
 			p.ExtractHeaderFromPayload<TCPHeader>(TCPHeader :: EstimateTCPHeaderLength(p));
 			TCPHeader p_tcp = p.FindHeader(Headers :: TCPHeader); 
 			p.ExtractHeaderFromPayload<IPHeader>(IPHeader :: EstimateIPHeaderLength(p));
-			IPHeader p_ip = p.FindHeader(Headers :: IPHeader);	
+			IPHeader p_ip = p.FindHeader(Headers :: IPHeader);
+
 			// Copy contents of packet into convenient struct
 			PacketInfo p_in(p_ip, p_tcp);
 			cout << "Received packet..." << endl;
-			p_in.print();
+			p_in.printShort();
+
 			// Get connection from packet
 			Connection conn;
 			conn.src = p_in.dest_ip; // src = this machine
@@ -191,15 +214,20 @@ int main(int argc, char * argv[]) {
 			conn.srcport = p_in.dest_port;
 			conn.destport = p_in.src_port;
 			conn.protocol = IP_PROTO_TCP;
+
+			// Buffer
+			Buffer buffer = p.GetPayload().ExtractFront(p_in.buffer_len);
+
 			// Grab TCP state if existing connection
 			unsigned int current_tcp_state;
 			ConnectionList<TCPState> :: iterator conn_list_iterator = conn_list.FindMatching(conn);
  			ConnectionToStateMapping<TCPState> & conn2state = (*conn_list_iterator);
 			TCPState * tcp_state;
 			if (conn2state.Matches(conn)) {
- 				tcp_state = &(conn2state).state;
+ 				tcp_state = &conn_list_iterator->state;
 				current_tcp_state = tcp_state->GetState();
 			}
+
 			// Else set to LISTEN
 			else {
 				current_tcp_state = LISTEN;
@@ -218,35 +246,45 @@ int main(int argc, char * argv[]) {
 					cout << "MUX: LISTEN\n";
 					if (IS_SYN(p_in.flags)) {
 						cout << "Conn request received.\n";
-						// Add new conn-state mapping
+
+						// New TCPState
 						TCPState new_state(p_in.seq, SYN_RCVD, 3);
 						tcp_state = &new_state;
-						ConnectionToStateMapping<TCPState> c2state(conn, Time(5), *tcp_state, true); 
-						conn_list.push_front(c2state);						
+
 						// Send SYN ACK
 						unsigned char flags = 0;
 						unsigned int ack = tcp_state->GetLastAcked() + 1;
+						unsigned int seq = 300; // server initial seq
 						Buffer b;
 						SET_ACK(flags);
 						SET_SYN(flags);
-						Packet ack_packet = createPacket(conn, b, flags, ack, 300);
-						MinetSend(mux, ack_packet); // First one discarded
-						MinetSend(mux, ack_packet);
+
+						p_send = createPacket(conn, b, flags, ack, seq); // TODO: make seq random
+						MinetSend(mux, p_send); // First one discarded
+						MinetSend(mux, p_send);
+						// Update state
+						tcp_state->SetLastAcked(p_in.seq);
+						tcp_state->SetLastRecvd(p_in.seq);
+						// Push new state mapping
+						ConnectionToStateMapping<TCPState> c2state(conn, Time(5), *tcp_state, true); 
+						conn_list.push_front(c2state);
 					}
 					break;
 				}
 				// Waiting for an ack after having both received & sent a conn req (host)
+				// Do not respond...
 				case SYN_RCVD: {
 					cout << "MUX: SYN_RCVD\n";
+
 					if (IS_ACK(p_in.flags)) {
 						cout << "Ack acknowledged.\n";
+
 						// Update state
-						conn2state.state.SetState(ESTABLISHED);
-						//conn_state.state.SetLastAcked(ack);
+						tcp_state->SetState(ESTABLISHED);
+						tcp_state->SetLastRecvd(p_in.seq);
 						
 						//response
-						response.type = STATUS;
-						response.connection = conn;
+						SockRequestResponse response = SockRequestResponse(WRITE, conn, buffer, 0, EOK);
 						MinetSend(sock, response);
 					}
 					break;
@@ -257,54 +295,90 @@ int main(int argc, char * argv[]) {
 					if(IS_SYN(p_in.flags) && IS_ACK(p_in.flags)) {
 						unsigned char flags = 0;
 						SET_ACK(flags);
+
 						// Ack packet
 						Buffer b;
-						//p_send = createPacket(connstate, 0, flags);
-						//p_send = createPacket(conn, b, flags);
-						//MinetSend(mux, p_send);
+						Packet p_send = createPacket(conn, b, flags, conn_list_iterator->state.GetLastRecvd(), conn_list_iterator->state.GetLastSent());
+						MinetSend(mux, p_send);
+
 						// Update state
-						conn2state.state.SetState(ESTABLISHED);
-						//SockRequestResponse write (WRITE, connstate.connection, buffer, 0, EOK);
-						SockRequestResponse write (WRITE, conn, b, 0, EOK);
-						MinetSend(sock, write);
+						tcp_state->SetState(ESTABLISHED);
+
+						// response
+						SockRequestResponse response = SockRequestResponse(WRITE, conn, buffer, 0, EOK);
+						MinetSend(sock, response);
 					}
 
 					break;
 				}
 
 				case SYN_SENT1: {
+					cout << "MUX: SYN_SENT1\n";
 					break;
 				}
 
 				case ESTABLISHED: {
+					cout << "MUX: ESTABLISHED\n";
+					if(IS_ACK(p_in.flags)) {
+						unsigned int lastRecvd = tcp_state->GetLastRecvd();
+						unsigned int lastAcked = tcp_state->GetLastAcked();
+						// Stop & wait if out of order
+						if (lastRecvd > p_in.seq) {
+							cout << "Recvd packet out of order, waiting..." << endl;
+							break;
+						}
+						// Ack receipt of data
+						if (p_in.seq > lastAcked) {
+							unsigned char flags = 0;
+							unsigned int ack = p_in.seq + 1;
+							unsigned int seq = p_in.ack;
+							SET_ACK(flags);
+							p_send = createPacket(conn, buffer, flags, ack, seq); // echo back buffer
+							MinetSend(mux, p_send);
+							// Update state
+							tcp_state->SetLastRecvd(p_in.seq);
+							tcp_state->SetLastAcked(p_in.seq);
+						}
+							
+					}
+					// Forward data to socket
+					//SockRequestResponse request = SockRequestResponse(WRITE, conn, buffer, p_in.buffer_len, EOK);
+					//MinetSend(sock, request);
 					break;
 				}
 
 				case SEND_DATA: {
+					cout << "SEND_DATA\n";
 					break;
 				}
 
 				case CLOSE_WAIT: {
+					cout << "CLOSE_WAIT\n";
 					break;
 				}
 
 				case FIN_WAIT1: {
+					cout << "MUX: FIN_WAIT1\n";
 					break;
 				}
 
 				case CLOSING: {
+					cout << "MUX: CLOSING\n";
 					break;
 				}
 
 				case LAST_ACK: {
+					cout << "MUX: LAST_ACK\n";
 					break;
 				}
 
 				case FIN_WAIT2: {
+					cout << "MUX: FIN_WAIT2\n";
 					break;
 				}
 
 				case TIME_WAIT: {
+					cout << "MUX: TIME_WAIT\n";
 					break;
 				}
 			}
@@ -315,53 +389,64 @@ int main(int argc, char * argv[]) {
 		/* Handle socket request or response */
 			SockRequestResponse request;
 			SockRequestResponse response;
-
 			MinetReceive(sock, request);
-			switch (request.type) {
-				case CONNECT: {
-					cout << "SOCK: CONNECT\n";
-					/*
-					Packet p;
-					ConnectionToStateMapping<TCPState> mapping;
-					// TCPState: LISTEN, SYN_RCVD, SYN_SENT, SYN_SENT1, ESTABLISHED, SEND_DATA, CLOSE_WAIT, FIN_WAIT1, CLOSING, LAST_ACK, DIN_WAIT2, TIME_WAIT
-					// Note: TCP states represent the state AFTER the departure or arrival of the segment (RFC 793)
-					// TCPState(unsigned int initialSequenceNum, unsigned int state, unsigned int timertries)
-					TCPState next_tcp_state = TCPState(1, SYN_SENT, 3); // What to assign to timertries? Just put 3 because 3 way handshake l0l
-					Packet packet_to_send;
-					*/
-					break;
-				}
-				case ACCEPT: {
-					cout << "SOCK: ACCEPT\n";
-					/*
-					TCPState tcp_state(0, LISTEN, 3);
-					ConnectionToStateMapping<TCPState> tcp_mapping(request.connection, Time(), tcp_state, false);
-					clist.push_front(tcp_mapping);
-					*/
-					break;
-				}
-				case STATUS:
-					cout << "SOCK: STATUS\n";
-					// ignored, no response needed
-					break;
-				case WRITE:
-					cout << "SOCK: WRITE\n";
-					break;
-				case FORWARD:
-					cout << "SOCK: FORWARD\n";
-					break;
-				case CLOSE:
-					cout << "SOCK: CLOSE\n";
-					break;
-				default:
-					cout << "SOCK REQ/RESP\n";
-			}			
+
+			ConnectionList<TCPState>::iterator conn_list_iterator = conn_list.FindMatching(request.connection);
+
+				switch (request.type) {
+					// Handle active open
+					case CONNECT: {
+						cout << "SOCK: CONNECT\n";
+
+						TCPState next_tcp_state = TCPState(1, SYN_SENT, 3); // What value to assign to tiemertries?
+						
+						ConnectionToStateMapping<TCPState> newMap(request.connection, Time(5), next_tcp_state, true); 
+						conn_list.push_front(newMap);
+
+						unsigned char flags = 0;
+						SET_SYN(flags);
+
+						// Syn Packet
+						Buffer b;
+						Packet send = createPacket(newMap.connection, b, flags, conn_list_iterator->state.GetLastRecvd(), conn_list_iterator->state.GetLastSent());
+						MinetSend(mux, send);
+						MinetSend(mux, send);
+
+						break;
+					}
+					case ACCEPT: {
+						cout << "SOCK: ACCEPT\n";
+
+						TCPState next_tcp_state = TCPState(1, LISTEN, 3); // What value to assign to tiemertries?
+
+						ConnectionToStateMapping<TCPState> newMap(request.connection, Time(5), next_tcp_state, true); 
+						conn_list.push_front(newMap);
+
+						break;
+					}
+					case STATUS:
+						cout << "SOCK: STATUS\n";
+						break;
+					case WRITE:
+
+						cout << "SOCK: WRITE\n";
+						break;
+					case FORWARD:
+						cout << "SOCK: FORWARD\n";
+						break;
+					case CLOSE:
+						cout << "SOCK: CLOSE\n";
+						break;
+					default:
+						cout << "SOCK REQ/RESP\n";
+				} 
 	    }
 	}
 
 	if (event.eventtype == MinetEvent::Timeout) {
 	    /* Handle timeout. Probably need to resend some packets */
-		//cerr << "Timed out\n";
+		//cout << "Timed out, resending packet\n";
+		//MinetSend(mux, p_send);
 	}
 
     }
