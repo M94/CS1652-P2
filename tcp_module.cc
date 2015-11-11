@@ -401,7 +401,7 @@ int main(int argc, char * argv[]) {
 						TCPState next_tcp_state = TCPState(1, SYN_SENT, 3); // What value to assign to tiemertries?
 						
 						ConnectionToStateMapping<TCPState> newMap(request.connection, Time(5), next_tcp_state, true); 
-						conn_list.push_front(newMap);
+						conn_list.push_front(newMap); // OR PUSH_BACK?
 
 						unsigned char flags = 0;
 						SET_SYN(flags);
@@ -412,6 +412,7 @@ int main(int argc, char * argv[]) {
 						MinetSend(mux, send);
 						MinetSend(mux, send);
 
+
 						break;
 					}
 					case ACCEPT: {
@@ -420,17 +421,31 @@ int main(int argc, char * argv[]) {
 						TCPState next_tcp_state = TCPState(1, LISTEN, 3); // What value to assign to tiemertries?
 
 						ConnectionToStateMapping<TCPState> newMap(request.connection, Time(5), next_tcp_state, true); 
-						conn_list.push_front(newMap);
+						conn_list.push_front(newMap); // OR PUSH-BACK
 
 						break;
 					}
-					case STATUS:
+					case STATUS: {
 						cout << "SOCK: STATUS\n";
-						break;
-					case WRITE:
 
-						cout << "SOCK: WRITE\n";
 						break;
+					}
+					case WRITE: {
+						cout << "SOCK: WRITE\n";
+
+						unsigned char flags = 0;
+						SET_ACK(flags);
+
+						Buffer bufferToSend;
+						bufferToSend = request.data;
+						
+						conn_list_iterator->state.SendBuffer.AddBack(bufferToSend);
+						Packet packetToSend = createPacket(conn_list_iterator->connection, bufferToSend, flags, conn_list_iterator->state.GetLastRecvd(), conn_list_iterator->state.GetLastSent());
+						MinetSend(mux, packetToSend);
+
+						
+						break;
+					}
 					case FORWARD:
 						cout << "SOCK: FORWARD\n";
 						break;
