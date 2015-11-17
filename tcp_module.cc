@@ -145,6 +145,14 @@ void printBuffer(Buffer &buffer) {
 	cout << "Buffer: " << buf << endl;
 }
 
+int findEarliestTimeout(ConnectionList<TCPState> & list) {
+	int timeout;
+	for (ConnectionList<TCPState> :: iterator it = list.begin(); it != list.end(); ++it) {
+		
+	
+	}	
+}
+
 int main(int argc, char * argv[]) {
 	/* Minet setup */
     MinetHandle mux;
@@ -173,7 +181,7 @@ int main(int argc, char * argv[]) {
     MinetSendToMonitor(MinetMonitoringEvent("tcp_module auc5|cmn26 handling tcp traffic........"));
 
     MinetEvent event;
-    double timeout = 3;
+    double timeout = -1;
 
     // ConnectionList stores a list (queue) of ConnectionToStateMappings
     ConnectionList<TCPState> conn_list;
@@ -242,13 +250,13 @@ int main(int argc, char * argv[]) {
 					if (IS_SYN(p_in.flags) && !IS_ACK(p_in.flags)) {
 						cout << "Conn request received.\n";
 						// New TCPState
-						TCPState new_state(p_in.seq, SYN_RCVD, 3);
+						unsigned int server_isn = rand() % 300; 	// Server initial seq # 
+						TCPState new_state(server_isn, SYN_RCVD, 3);
 						tcp_state = &new_state;
 						tcp_state->SetLastRecvd(p_in.seq);
 						// Send SYN ACK
 						unsigned char flags = 0;
 						unsigned int ack = p_in.seq + 1;		// Next seq expected from client
-						unsigned int server_isn = rand() % 300; 	// Server initial seq # 
 						Buffer b;
 						SET_ACK(flags);
 						SET_SYN(flags);
@@ -257,7 +265,7 @@ int main(int argc, char * argv[]) {
 						MinetSend(mux, p_send);
 						// Update state for sent packet
 						tcp_state->SetLastSent(server_isn);
-						if (!tcp_state->SetLastAcked(ack)) cout << "Error setting LastAcked\n";
+						tcp_state->SetLastAcked(ack);
 						// Push new state mapping
 						ConnectionToStateMapping<TCPState> c2state(conn, Time(5), *tcp_state, true); 
 						conn_list.push_front(c2state);
@@ -305,7 +313,7 @@ int main(int argc, char * argv[]) {
 						MinetSend(mux, p_send);
 
 						// Update state for sent packet
-						if (!tcp_state->SetLastAcked(ack)) cout << "Error setting LastAcked\n";
+						tcp_state->SetLastAcked(ack);
 						tcp_state->SetLastSent(seq);
 
 						// Socket response
@@ -340,6 +348,11 @@ int main(int argc, char * argv[]) {
 						if (IS_FIN(p_in.flags)) {
 							cout << "Close request recvd" << endl;
 							tcp_state->SetState(CLOSE_WAIT);
+						} else if (p_in.buffer_len > 0){
+							// Write data to socket
+							tcp_state->RecvBuffer.AddBack(buffer);
+							SockRequestResponse response = SockRequestResponse(WRITE, conn, tcp_state->RecvBuffer, p_in.buffer_len, EOK);
+							MinetSend(sock, response);							
 						}
 
 						// Ack packet
@@ -352,14 +365,11 @@ int main(int argc, char * argv[]) {
 							p_send = createPacket(conn, buffer, flags, ack, seq, p_in.buffer_len); 	// Echo back buffer
 							MinetSend(mux, p_send);
 							// Update state for sent packet
-							if (!tcp_state->SetLastAcked(ack)) cout << "Error setting LastAcked\n";
+							tcp_state->SetLastAcked(ack);
 							tcp_state->SetLastSent(seq);
 						}
 							
 					}
-					// Forward data to socket
-					//SockRequestResponse request = SockRequestResponse(WRITE, conn, buffer, p_in.buffer_len, EOK);
-					//MinetSend(sock, request);
 					break;
 				}
 
@@ -380,7 +390,7 @@ int main(int argc, char * argv[]) {
 					p_send = createPacket(conn, b, flags, ack, seq, 0);
 					MinetSend(mux, p_send);	
 					// Update state for sent packet
-					if (!tcp_state->SetLastAcked(ack)) cout << "Error setting LastAcked\n";
+					tcp_state->SetLastAcked(ack);
 					tcp_state->SetLastSent(seq);	
 					// TCP state transition
 					tcp_state->SetState(LAST_ACK);
@@ -447,13 +457,13 @@ int main(int argc, char * argv[]) {
 	    if (event.handle == sock) {
 		/* Handle socket request or response */
 			SockRequestResponse request;
-			SockRequestResponse response;
 			MinetReceive(sock, request);
 
 			ConnectionList<TCPState>::iterator conn_list_iterator = conn_list.FindMatching(request.connection);
  			ConnectionToStateMapping<TCPState> & conn2state = (*conn_list_iterator);
 			// Grab TCP state if possible
 			TCPState * tcp_state;
+
 			if (conn2state.Matches(request.connection)) {
  				tcp_state = &conn_list_iterator->state;
 			}
@@ -495,46 +505,53 @@ int main(int argc, char * argv[]) {
 						
 						break;
 					}
-					case STATUS:
+					// Handle socket response to TCP write
+					// Resend remaining bytes
+					case STATUS: {
 						cout << "SOCK: STATUS\n";
+						unsigned int remaining = request.data.GetSize();
+						if (remaining > 0) {
+							cout << "Sent remaining " << remaining << "B to socket" << endl;
+							// Use tcp state recv buffer here
+						}
 						break;
+					}
 					// Send data packet					
-					case WRITE:
-						/*
+					case WRITE: {
 						cout << "SOCK: WRITE\n";
- 						TCPState * tcp_state = &conn_list_iterator->state;
 						unsigned int lastRecvd = tcp_state->GetLastRecvd();
 						unsigned int lastAcked = tcp_state->GetLastAcked();
 						unsigned int lastSent = tcp_state->GetLastSent();
 						// Send packet
 						unsigned char flags = 0;
 						SET_ACK(flags);
-						unsigned int ack = lastRecvd + 1;	// Next seq expected from client
-						unsigned int seq = lastSent + 1; 	// Initial seq
-						Buffer data = request.data;
-						Packet send = createPacket(request.connection, data, flags, ack, seq);
+						unsigned int ack = lastRecvd;	
+						unsigned int seq = lastSent; 	
+						Packet send = createPacket(request.connection, request.data, flags, ack, seq, request.data.GetSize());
 						MinetSend(mux, send);
 						// Update TCPState
 						tcp_state->SetLastAcked(ack);
 						tcp_state->SetLastSent(seq);
-				*/
 						break;
+					}
 					case FORWARD:
 						cout << "SOCK: FORWARD\n";
 						break;
 					// Send close request (client)
 					case CLOSE: {
 						cout << "SOCK: CLOSE\n";
+						unsigned int lastSent = tcp_state->GetLastSent();
+						unsigned int lastAck = tcp_state->GetLastAcked();
 						// Send FIN 
 						unsigned char flags = 0;
-						unsigned int ack = 0; 
-						unsigned int seq = rand() % 300; 
+						unsigned int ack = lastAck; 
+						unsigned int seq = lastSent; 
 						SET_FIN(flags);
 						Buffer b;
 						Packet fin = createPacket(request.connection, b, flags, ack, seq, 0);
-						MinetSend(mux, fin);	
+						MinetSend(mux, fin);
 						// Update state for sent packet
-						if (!tcp_state->SetLastAcked(ack)) cout << "Error setting LastAcked\n";
+						tcp_state->SetLastAcked(ack);
 						tcp_state->SetLastSent(seq);		
 						break;
 
@@ -545,10 +562,9 @@ int main(int argc, char * argv[]) {
 	    }
 	}
 
+	/* Handle timeout. Probably need to resend some packets */
 	if (event.eventtype == MinetEvent::Timeout) {
-	    /* Handle timeout. Probably need to resend some packets */
-		//cout << "Timed out, resending packet\n";
-		//MinetSend(mux, p_send);
+		
 	}
 
     }
