@@ -558,6 +558,12 @@ int main(int argc, char * argv[]) {
 						if (remaining > 0) {
 							cout << "Sent remaining " << remaining << "B to socket" << endl;
 							// Use tcp state recv buffer here
+							response.type = WRITE;
+							response.connection = conn_list_iterator->connection;
+							response.data = conn_list_iterator->state.RecvBuffer;
+							response.bytes = conn_list_iterator->state.RecvBuffer.GetSize();
+							response.error = EOK;
+							MinetSend(sock, response);
 						}
 						// Should be sent in response to TCP WRITEs
 						// THe connection should match that in WRITE
