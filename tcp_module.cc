@@ -556,7 +556,6 @@ int main(int argc, char * argv[]) {
 					case CLOSE: {
 						cout << "SOCK: CLOSE\n";
 						// Send FIN 
-						tcp_state->SetState(FIN_WAIT1);
 
 						unsigned char flags = 0;
 						unsigned int ack = 0; 
