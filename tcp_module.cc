@@ -379,7 +379,9 @@ int main(int argc, char * argv[]) {
 				}
 				// Send FIN after sending ack for close (host)
 				case CLOSE_WAIT: {
+
 					cout << "MUX: CLOSE_WAIT\n";
+
 					// Send FIN 
 					unsigned int lastSent = tcp_state->GetLastSent();
 					unsigned char flags = 0;
@@ -400,6 +402,7 @@ int main(int argc, char * argv[]) {
 
 				// Receive ack, send nothing (client)
 				case FIN_WAIT1: {
+
 					cout << "MUX: FIN_WAIT1\n";
 					if (IS_ACK(p_in.flags)) {
 						// TCP state transition
@@ -417,7 +420,9 @@ int main(int argc, char * argv[]) {
 				case LAST_ACK: {
 					cout << "MUX: LAST_ACK\n";
 					if (IS_ACK(p_in.flags)) {
+
 						// Close connection
+
 						conn_list.erase(conn_list_iterator);
 						cout << "Connection closed." << endl;	
 					}
@@ -426,6 +431,7 @@ int main(int argc, char * argv[]) {
 
 				// Receive fin, send ack (client)
 				case FIN_WAIT2: {
+					
 					cout << "MUX: FIN_WAIT2\n";
 					if (IS_FIN(p_in.flags)) {
 						// Send ack
@@ -436,7 +442,7 @@ int main(int argc, char * argv[]) {
 						p_send = createPacket(conn, buffer, flags, ack, seq, p_in.buffer_len); 	// Echo back buffer
 						MinetSend(mux, p_send);
 						// Update state for sent packet
-						if (!tcp_state->SetLastAcked(ack)) cout << "Error setting LastAcked\n";
+						tcp_state->SetLastAcked(ack);
 						tcp_state->SetLastSent(seq);
 						// TCP state transition
 						tcp_state->SetState(TIME_WAIT);
@@ -447,6 +453,23 @@ int main(int argc, char * argv[]) {
 				// Receive fin, wait 30 sec, and close (client)
 				case TIME_WAIT: {
 					cout << "MUX: TIME_WAIT\n";
+					if(IS_FIN(p_in.flags)) {
+						
+						unsigned char flags = 0;
+						unsigned int ack = p_in.seq + p_in.buffer_len;
+						unsigned int seq = p_in.ack;
+						SET_ACK(flags);
+						p_send = createPacket(conn, buffer, flags, ack, seq, 0);
+						MinetSend(mux, p_send);
+						
+						//
+						// WAIT 30 SECS
+						//
+
+						conn_list.erase(conn_list_iterator);
+					}
+
+
 					
 					break;
 				}
@@ -470,6 +493,7 @@ int main(int argc, char * argv[]) {
 
 				switch (request.type) {
 					// Send connection request (ACTIVE OPEN) (client)
+					// This should create a connection address to the state mapping & init active open
 					case CONNECT: {
 						cout << "SOCK: CONNECT\n";
 
@@ -492,6 +516,16 @@ int main(int argc, char * argv[]) {
 						// Push TCPState
 						ConnectionToStateMapping<TCPState> new_map(request.connection, Time(5), new_state, true); 
 						conn_list.push_front(new_map);
+
+						// a STATUS with the same connection, no data, no byte count, and the error code
+						response.type = STATUS;
+						response.connection = request.connection;
+						response.bytes = 0;
+						response.error = EOK;
+						MinetSend(sock, response);
+
+						// After connection established, return a WRITE with zero bytes
+
 						break;
 					}
 					// Accept connection request (PASSIVE OPEN) (host)
@@ -502,7 +536,16 @@ int main(int argc, char * argv[]) {
 
 						ConnectionToStateMapping<TCPState> newMap(request.connection, Time(5), next_tcp_state, true); 
 						conn_list.push_front(newMap);
+
+						// return a STATUS with only the error code set
+						response.type = STATUS;
+						response.connection = request.connection;
+						response.bytes = 0;
+						response.error = EOK;
+						MinetSend(sock, response);
 						
+						// Whenever a connection arrives, the TCP module will accept & send a 0 byte WRITE
+
 						break;
 					}
 					// Handle socket response to TCP write
@@ -514,11 +557,27 @@ int main(int argc, char * argv[]) {
 							cout << "Sent remaining " << remaining << "B to socket" << endl;
 							// Use tcp state recv buffer here
 						}
+						// Should be sent in response to TCP WRITEs
+						// THe connection should match that in WRITE
+						// Byte count reflects the number of bytes read from the WRITE
+						// TCP module will resend the remaining bytes at some point in the future
+
+					//	response.type = ??
+					//	response.connection = request.connection;
+					//	response.bytes = ??
+					//	response.error = EOK;
+					//	MinetSend(sock, response);
+
+
+>>>>>>> f5324ca3e6c06b7e7496842c240fe965ed189543
 						break;
 					}
 					// Send data packet					
-					case WRITE: {
+					case WRITE:
+						
 						cout << "SOCK: WRITE\n";
+						/*
+ 						TCPState * tcp_state = &conn_list_iterator->state;
 						unsigned int lastRecvd = tcp_state->GetLastRecvd();
 						unsigned int lastAcked = tcp_state->GetLastAcked();
 						unsigned int lastSent = tcp_state->GetLastSent();
@@ -532,29 +591,68 @@ int main(int argc, char * argv[]) {
 						// Update TCPState
 						tcp_state->SetLastAcked(ack);
 						tcp_state->SetLastSent(seq);
+				*/
+						// a STATUS with the same connection, no data, # bytes actually queued, & error
+						response.type = STATUS;
+						response.connection = request.connection;
+						// response.bytes = ??
+						response.error = EOK;
+						MinetSend(sock, response);
+
+						// Responsibility of Sock module to deal with WRITEs that actually write fewer than the required number of bytes
 						break;
 					}
 					case FORWARD:
+						// DON'T NEED TO IMPLEMENT
+
 						cout << "SOCK: FORWARD\n";
+
+						// A zero error STATUS will be returned
+						response.type = STATUS;
+						response.connection = request.connection;
+						response.bytes = 0;
+						response.error = EOK;
+
 						break;
 					// Send close request (client)
 					case CLOSE: {
 						cout << "SOCK: CLOSE\n";
 						unsigned int lastSent = tcp_state->GetLastSent();
-						unsigned int lastAck = tcp_state->GetLastAcked();
-						// Send FIN 
+						unsigned int lastAck = tcp_state->GetLastAcked();'
+						// New TCP state
+						tcp_state->SetState(FIN_WAIT1);
+						// Send FIN
 						unsigned char flags = 0;
 						unsigned int ack = lastAck; 
 						unsigned int seq = lastSent; 
 						SET_FIN(flags);
+						SET_ACK(flags);
 						Buffer b;
 						Packet fin = createPacket(request.connection, b, flags, ack, seq, 0);
 						MinetSend(mux, fin);
 						// Update state for sent packet
 						tcp_state->SetLastAcked(ack);
 						tcp_state->SetLastSent(seq);		
+						/// !!!!!!!!
+						// IF there is a matching connection, this will close it. Otherwise, it is an error
+						// !!!!!!!!!
+						// a STATUS with the same connection and an error code will be returned
+						ConnectionList<TCPState> :: iterator conn_list_iterator = conn_list.FindMatching(request.connection);			
+						if(conn_list_iterator == conn_list.end()) {
+							response.type = STATUS;
+							response.connection = request.connection;
+							response.bytes = 0;
+							response.error = ENOMATCH;
+						} else {
+							response.type = STATUS;
+							response.connection = request.connection;
+							response.bytes = 0;
+							response.error = EOK;	
+							conn_list.erase(conn_list_iterator);
+						}
+						MinetSend(sock, response);
+						
 						break;
-
 					}
 					default:
 						cout << "SOCK REQ/RESP\n";
