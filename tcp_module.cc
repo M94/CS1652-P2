@@ -410,7 +410,12 @@ int main(int argc, char * argv[]) {
 				case LAST_ACK: {
 					cout << "MUX: LAST_ACK\n";
 					if (IS_ACK(p_in.flags)) {
+
 						// Close connection
+						Buffer b;
+						SockRequestResponse req = SockRequestResponse(CLOSE, conn, b, 0, EOK);
+						MinetSend(sock, req);
+
 						conn_list.erase(conn_list_iterator);
 						cout << "Connection closed." << endl;	
 					}
@@ -453,6 +458,10 @@ int main(int argc, char * argv[]) {
 						//
 						// WAIT 30 SECS
 						//
+
+						Buffer b;
+						SockRequestResponse req = SockRequestResponse(CLOSE, conn, b, 0, EOK);
+						MinetSend(sock, req);
 
 						conn_list.erase(conn_list_iterator);
 					}
