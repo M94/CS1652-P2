@@ -545,6 +545,13 @@ int main(int argc, char * argv[]) {
 						// Byte count reflects the number of bytes read from the WRITE
 						// TCP module will resend the remaining bytes at some point in the future
 
+					//	response.type = ??
+					//	response.connection = request.connection;
+					//	response.bytes = ??
+					//	response.error = EOK;
+					//	MinetSend(sock, response);
+
+
 						break;
 					// Send data packet					
 					case WRITE:
@@ -572,6 +579,7 @@ int main(int argc, char * argv[]) {
 						response.connection = request.connection;
 						// response.bytes = ??
 						response.error = EOK;
+						MinetSend(sock, response);
 
 						// Responsibility of Sock module to deal with WRITEs that actually write fewer than the required number of bytes
 
@@ -609,13 +617,23 @@ int main(int argc, char * argv[]) {
 						/// !!!!!!!!
 						// IF there is a matching connection, this will close it. Otherwise, it is an error
 						// !!!!!!!!!
-
 						// a STATUS with the same connection and an error code will be returned
-						response.type = STATUS;
-						response.connection = request.connection;
-						response.bytes = 0;
-						response.error = EOK;
-
+						ConnectionList<TCPState> :: iterator conn_list_iterator = conn_list.FindMatching(request.connection);			
+						
+						if(conn_list_iterator == conn_list.end()) {
+							response.type = STATUS;
+							response.connection = request.connection;
+							response.bytes = 0;
+							response.error = ENOMATCH;
+						} else {
+							response.type = STATUS;
+							response.connection = request.connection;
+							response.bytes = 0;
+							response.error = EOK;	
+							conn_list.erase(conn_list_iterator);
+						}
+						MinetSend(sock, response);
+						
 						break;
 					}
 					default:
