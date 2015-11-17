@@ -483,6 +483,7 @@ int main(int argc, char * argv[]) {
 
 				switch (request.type) {
 					// Send connection request (ACTIVE OPEN) (client)
+					// This should create a connection address to the state mapping & init active open
 					case CONNECT: {
 						cout << "SOCK: CONNECT\n";
 
@@ -505,6 +506,16 @@ int main(int argc, char * argv[]) {
 						// Push TCPState
 						ConnectionToStateMapping<TCPState> new_map(request.connection, Time(5), new_state, true); 
 						conn_list.push_front(new_map);
+
+						// a STATUS with the same connection, no data, no byte count, and the error code
+						response.type = STATUS;
+						response.connection = request.connection;
+						response.bytes = 0;
+						response.error = EOK;
+						MinetSend(sock, response);
+
+						// After connection established, return a WRITE with zero bytes
+
 						break;
 					}
 					// Accept connection request (PASSIVE OPEN) (host)
@@ -515,16 +526,31 @@ int main(int argc, char * argv[]) {
 
 						ConnectionToStateMapping<TCPState> newMap(request.connection, Time(5), next_tcp_state, true); 
 						conn_list.push_front(newMap);
+
+						// return a STATUS with only the error code set
+						response.type = STATUS;
+						response.connection = request.connection;
+						response.bytes = 0;
+						response.error = EOK;
+						MinetSend(sock, response);
 						
+						// Whenever a connection arrives, the TCP module will accept & send a 0 byte WRITE
+
 						break;
 					}
 					case STATUS:
 						cout << "SOCK: STATUS\n";
+						// Should be sent in response to TCP WRITEs
+						// THe connection should match that in WRITE
+						// Byte count reflects the number of bytes read from the WRITE
+						// TCP module will resend the remaining bytes at some point in the future
+
 						break;
 					// Send data packet					
 					case WRITE:
-						/*
+						
 						cout << "SOCK: WRITE\n";
+						/*
  						TCPState * tcp_state = &conn_list_iterator->state;
 						unsigned int lastRecvd = tcp_state->GetLastRecvd();
 						unsigned int lastAcked = tcp_state->GetLastAcked();
@@ -541,9 +567,26 @@ int main(int argc, char * argv[]) {
 						tcp_state->SetLastAcked(ack);
 						tcp_state->SetLastSent(seq);
 				*/
+						// a STATUS with the same connection, no data, # bytes actually queued, & error
+						response.type = STATUS;
+						response.connection = request.connection;
+						// response.bytes = ??
+						response.error = EOK;
+
+						// Responsibility of Sock module to deal with WRITEs that actually write fewer than the required number of bytes
+
 						break;
 					case FORWARD:
+						// DON'T NEED TO IMPLEMENT
+
 						cout << "SOCK: FORWARD\n";
+
+						// A zero error STATUS will be returned
+						response.type = STATUS;
+						response.connection = request.connection;
+						response.bytes = 0;
+						response.error = EOK;
+
 						break;
 					// Send close request (client)
 					case CLOSE: {
@@ -561,9 +604,19 @@ int main(int argc, char * argv[]) {
 						MinetSend(mux, fin);	
 						// Update state for sent packet
 						if (!tcp_state->SetLastAcked(ack)) cout << "Error setting LastAcked\n";
-						tcp_state->SetLastSent(seq);		
-						break;
+						tcp_state->SetLastSent(seq);
 
+						/// !!!!!!!!
+						// IF there is a matching connection, this will close it. Otherwise, it is an error
+						// !!!!!!!!!
+
+						// a STATUS with the same connection and an error code will be returned
+						response.type = STATUS;
+						response.connection = request.connection;
+						response.bytes = 0;
+						response.error = EOK;
+
+						break;
 					}
 					default:
 						cout << "SOCK REQ/RESP\n";
