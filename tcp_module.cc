@@ -181,7 +181,7 @@ int main(int argc, char * argv[]) {
     MinetSendToMonitor(MinetMonitoringEvent("tcp_module auc5|cmn26 handling tcp traffic........"));
 
     MinetEvent event;
-    double timeout = -1;
+    double timeout = 3;
 
     // ConnectionList stores a list (queue) of ConnectionToStateMappings
     ConnectionList<TCPState> conn_list;
@@ -365,11 +365,14 @@ int main(int argc, char * argv[]) {
 							p_send = createPacket(conn, buffer, flags, ack, seq, p_in.buffer_len); 	// Echo back buffer
 							MinetSend(mux, p_send);
 							// Update state for sent packet
-							tcp_state->SetLastAcked(ack);
+							if (!tcp_state->SetLastAcked(ack)) cout << "Error setting LastAcked\n";
 							tcp_state->SetLastSent(seq);
 						}
 							
 					}
+					// Forward data to socket
+					//SockRequestResponse request = SockRequestResponse(WRITE, conn, buffer, p_in.buffer_len, EOK);
+					//MinetSend(sock, request);
 					break;
 				}
 
@@ -392,7 +395,7 @@ int main(int argc, char * argv[]) {
 					p_send = createPacket(conn, b, flags, ack, seq, 0);
 					MinetSend(mux, p_send);	
 					// Update state for sent packet
-					tcp_state->SetLastAcked(ack);
+					if (!tcp_state->SetLastAcked(ack)) cout << "Error setting LastAcked\n";
 					tcp_state->SetLastSent(seq);	
 					// TCP state transition
 					tcp_state->SetState(LAST_ACK);
@@ -442,7 +445,7 @@ int main(int argc, char * argv[]) {
 						p_send = createPacket(conn, buffer, flags, ack, seq, p_in.buffer_len); 	// Echo back buffer
 						MinetSend(mux, p_send);
 						// Update state for sent packet
-						tcp_state->SetLastAcked(ack);
+						if (!tcp_state->SetLastAcked(ack)) cout << "Error setting LastAcked\n";
 						tcp_state->SetLastSent(seq);
 						// TCP state transition
 						tcp_state->SetState(TIME_WAIT);
@@ -480,13 +483,13 @@ int main(int argc, char * argv[]) {
 	    if (event.handle == sock) {
 		/* Handle socket request or response */
 			SockRequestResponse request;
+			SockRequestResponse response;
 			MinetReceive(sock, request);
 
 			ConnectionList<TCPState>::iterator conn_list_iterator = conn_list.FindMatching(request.connection);
  			ConnectionToStateMapping<TCPState> & conn2state = (*conn_list_iterator);
 			// Grab TCP state if possible
 			TCPState * tcp_state;
-
 			if (conn2state.Matches(request.connection)) {
  				tcp_state = &conn_list_iterator->state;
 			}
@@ -548,9 +551,8 @@ int main(int argc, char * argv[]) {
 
 						break;
 					}
-					// Handle socket response to TCP write
-					// Resend remaining bytes
-					case STATUS: {
+					case STATUS:
+						{
 						cout << "SOCK: STATUS\n";
 						unsigned int remaining = request.data.GetSize();
 						if (remaining > 0) {
@@ -569,9 +571,8 @@ int main(int argc, char * argv[]) {
 					//	MinetSend(sock, response);
 
 
->>>>>>> f5324ca3e6c06b7e7496842c240fe965ed189543
 						break;
-					}
+						}
 					// Send data packet					
 					case WRITE:
 						
@@ -584,9 +585,10 @@ int main(int argc, char * argv[]) {
 						// Send packet
 						unsigned char flags = 0;
 						SET_ACK(flags);
-						unsigned int ack = lastRecvd;	
-						unsigned int seq = lastSent; 	
-						Packet send = createPacket(request.connection, request.data, flags, ack, seq, request.data.GetSize());
+						unsigned int ack = lastRecvd + 1;	// Next seq expected from client
+						unsigned int seq = lastSent + 1; 	// Initial seq
+						Buffer data = request.data;
+						Packet send = createPacket(request.connection, data, flags, ack, seq);
 						MinetSend(mux, send);
 						// Update TCPState
 						tcp_state->SetLastAcked(ack);
@@ -600,8 +602,8 @@ int main(int argc, char * argv[]) {
 						MinetSend(sock, response);
 
 						// Responsibility of Sock module to deal with WRITEs that actually write fewer than the required number of bytes
+
 						break;
-					}
 					case FORWARD:
 						// DON'T NEED TO IMPLEMENT
 
@@ -615,35 +617,40 @@ int main(int argc, char * argv[]) {
 
 						break;
 					// Send close request (client)
+					// Shut down the connection gracefully, then remove the connection
 					case CLOSE: {
 						cout << "SOCK: CLOSE\n";
-						unsigned int lastSent = tcp_state->GetLastSent();
-						unsigned int lastAck = tcp_state->GetLastAcked();'
-						// New TCP state
-						tcp_state->SetState(FIN_WAIT1);
-						// Send FIN
-						unsigned char flags = 0;
-						unsigned int ack = lastAck; 
-						unsigned int seq = lastSent; 
-						SET_FIN(flags);
-						SET_ACK(flags);
-						Buffer b;
-						Packet fin = createPacket(request.connection, b, flags, ack, seq, 0);
-						MinetSend(mux, fin);
-						// Update state for sent packet
-						tcp_state->SetLastAcked(ack);
-						tcp_state->SetLastSent(seq);		
-						/// !!!!!!!!
-						// IF there is a matching connection, this will close it. Otherwise, it is an error
-						// !!!!!!!!!
+
 						// a STATUS with the same connection and an error code will be returned
 						ConnectionList<TCPState> :: iterator conn_list_iterator = conn_list.FindMatching(request.connection);			
+						
+						// If there is no matching connection an error code will be returned
 						if(conn_list_iterator == conn_list.end()) {
 							response.type = STATUS;
 							response.connection = request.connection;
 							response.bytes = 0;
 							response.error = ENOMATCH;
+						// If there is a matching connection, this will close it
 						} else {
+							unsigned int lastSent = tcp_state->GetLastSent();
+							unsigned int lastAck = tcp_state->GetLastAcked();
+
+							// Update state for connection termination
+							tcp_state->SetState(FIN_WAIT1);
+
+							// Send FIN
+							unsigned char flags = 0;
+							unsigned int ack = lastAck;
+							unsigned int seq = lastSent;
+							SET_FIN(flags);
+							SET_ACK(flags);
+							Buffer b;
+							Packet fin = createPacket(request.connection, b, flags, ack, seq, 0);
+							MinetSend(mux, fin);	
+							// Update state for sent packet
+							tcp_state->SetLastAcked(ack);
+							tcp_state->SetLastSent(seq);
+
 							response.type = STATUS;
 							response.connection = request.connection;
 							response.bytes = 0;
@@ -662,7 +669,7 @@ int main(int argc, char * argv[]) {
 
 	/* Handle timeout. Probably need to resend some packets */
 	if (event.eventtype == MinetEvent::Timeout) {
-		
+
 	}
 
     }
