@@ -369,7 +369,9 @@ int main(int argc, char * argv[]) {
 				}
 				// Send FIN after sending ack for close (host)
 				case CLOSE_WAIT: {
+
 					cout << "MUX: CLOSE_WAIT\n";
+
 					// Send FIN 
 					unsigned int lastSent = tcp_state->GetLastSent();
 					unsigned char flags = 0;
@@ -390,6 +392,7 @@ int main(int argc, char * argv[]) {
 
 				// Receive ack, send nothing (client)
 				case FIN_WAIT1: {
+
 					cout << "MUX: FIN_WAIT1\n";
 					if (IS_ACK(p_in.flags)) {
 						// TCP state transition
@@ -416,6 +419,7 @@ int main(int argc, char * argv[]) {
 
 				// Receive fin, send ack (client)
 				case FIN_WAIT2: {
+					
 					cout << "MUX: FIN_WAIT2\n";
 					if (IS_FIN(p_in.flags)) {
 						// Send ack
@@ -437,6 +441,23 @@ int main(int argc, char * argv[]) {
 				// Receive fin, wait 30 sec, and close (client)
 				case TIME_WAIT: {
 					cout << "MUX: TIME_WAIT\n";
+					if(IS_FIN(p_in.flags)) {
+						
+						unsigned char flags = 0;
+						unsigned int ack = p_in.seq + p_in.buffer_len;
+						unsigned int seq = p_in.ack;
+						SET_ACK(flags);
+						p_send = createPacket(conn, buffer, flags, ack, seq, 0);
+						MinetSend(mux, p_send);
+						
+						//
+						// WAIT 30 SECS
+						//
+
+						conn_list.erase(conn_list_iterator);
+					}
+
+
 					
 					break;
 				}
@@ -526,10 +547,13 @@ int main(int argc, char * argv[]) {
 					case CLOSE: {
 						cout << "SOCK: CLOSE\n";
 						// Send FIN 
+						tcp_state->SetState(FIN_WAIT1);
+
 						unsigned char flags = 0;
 						unsigned int ack = 0; 
 						unsigned int seq = rand() % 300; 
 						SET_FIN(flags);
+						SET_ACK(flags);
 						Buffer b;
 						Packet fin = createPacket(request.connection, b, flags, ack, seq, 0);
 						MinetSend(mux, fin);	
