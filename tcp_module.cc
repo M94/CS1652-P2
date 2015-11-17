@@ -412,9 +412,6 @@ int main(int argc, char * argv[]) {
 					if (IS_ACK(p_in.flags)) {
 
 						// Close connection
-						Buffer b;
-						SockRequestResponse req = SockRequestResponse(CLOSE, conn, b, 0, EOK);
-						MinetSend(sock, req);
 
 						conn_list.erase(conn_list_iterator);
 						cout << "Connection closed." << endl;	
@@ -458,10 +455,6 @@ int main(int argc, char * argv[]) {
 						//
 						// WAIT 30 SECS
 						//
-
-						Buffer b;
-						SockRequestResponse req = SockRequestResponse(CLOSE, conn, b, 0, EOK);
-						MinetSend(sock, req);
 
 						conn_list.erase(conn_list_iterator);
 					}
@@ -555,7 +548,8 @@ int main(int argc, char * argv[]) {
 					// Send close request (client)
 					case CLOSE: {
 						cout << "SOCK: CLOSE\n";
-						// Send FIN 
+						// Send FIN
+						tcp_state->SetState(FIN_WAIT1);
 
 						unsigned char flags = 0;
 						unsigned int ack = 0; 
