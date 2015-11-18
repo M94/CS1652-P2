@@ -308,9 +308,6 @@ int main(int argc, char * argv[]) {
 				case SYN_SENT: {
 					cout << "MUX: SYN_SENT\n";
 					if(IS_SYN(p_in.flags) && IS_ACK(p_in.flags)) {
-						unsigned int lastRecvd = tcp_state->GetLastRecvd();
-						unsigned int lastAcked = tcp_state->GetLastAcked();
-						unsigned int lastSent = tcp_state->GetLastSent();
 
 						// Update state for received packet
 						tcp_state->SetLastRecvd(p_in.seq);
@@ -351,10 +348,6 @@ int main(int argc, char * argv[]) {
 					if(IS_ACK(p_in.flags)) {
 						// Updated state for received packet
 						tcp_state->SetLastRecvd(p_in.seq);
-
-						unsigned int lastRecvd = tcp_state->GetLastRecvd();
-						unsigned int lastAcked = tcp_state->GetLastAcked();
-						unsigned int lastSent = tcp_state->GetLastSent();
 
 						/* Handle packet types sequentially */
 
@@ -483,7 +476,9 @@ int main(int argc, char * argv[]) {
 				case TIME_WAIT: {
 					cout << "MUX: TIME_WAIT\n";
 					if(IS_FIN(p_in.flags)) {
-						// WAIT 30 SECS
+						
+						// Sleep two times MSL
+						sleep(2 * TCP_HEADER_OPTION_KIND_MSS_LEN);
 
 						// Remove connection
 						conn_list.erase(conn_list_iterator);
@@ -587,8 +582,16 @@ int main(int argc, char * argv[]) {
 							// Pop data from buffer that was successfully written in TCP Write
 							tcp_state->RecvBuffer.Erase(0, request.bytes);
 							unsigned int remaining = tcp_state->RecvBuffer.GetSize();
+							// Send remaining back to WRITE to be written ?
 							if (remaining > 0) {
 								cout << remaining << " remaining in recv buffer." << endl;
+								response.type = WRITE;
+								response.connection = request.connection;
+								response.data = tcp_state->RecvBuffer;
+								response.bytes = tcp_state->RecvBuffer.GetSize();
+								response.error = EOK;
+
+								MinetSend(sock, response);
 							}
 						}
 	
@@ -613,7 +616,7 @@ int main(int argc, char * argv[]) {
 						{
 							unsigned int lastRecvd = tcp_state->GetLastRecvd();
 							unsigned int lastSent = tcp_state->GetLastSent();
-							// Send packet
+							// Send ACK
 							unsigned char flags = 0;
 							SET_ACK(flags);
 							unsigned int ack = lastRecvd;	
@@ -655,7 +658,7 @@ int main(int argc, char * argv[]) {
 						cout << "SOCK: CLOSE\n";
 						unsigned int lastSent = tcp_state->GetLastSent();
 						unsigned int lastAck = tcp_state->GetLastAcked();
-						// New TCP state
+						// Set TCP state
 						tcp_state->SetState(FIN_WAIT1);
 						// Send FIN
 						unsigned char flags = 0;
@@ -669,9 +672,7 @@ int main(int argc, char * argv[]) {
 						// Update state for sent packet
 						tcp_state->SetLastAcked(ack);
 						tcp_state->SetLastSent(seq);		
-						/// !!!!!!!!
-						// IF there is a matching connection, this will close it. Otherwise, it is an error
-						// !!!!!!!!!
+						// If there is a matching connection, this will close it. Otherwise, it is an error
 						// a STATUS with the same connection and an error code will be returned
 						ConnectionList<TCPState> :: iterator conn_list_iterator = conn_list.FindMatching(request.connection);			
 						if(conn_list_iterator == conn_list.end()) {
