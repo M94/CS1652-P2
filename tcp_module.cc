@@ -134,6 +134,7 @@ Packet createPacket(Connection conn, Buffer buffer, char flags, unsigned int ack
 	p.PushBackHeader(tcp);		
 	PacketInfo p_in(ip, tcp);
 	p_in.printMsg("Created");
+	if (!tcp.IsCorrectChecksum(p)) cout << "PACKET HAS INCORRECT CHECKSUM" << endl;
 	return p;
 }
 
@@ -206,6 +207,13 @@ int main(int argc, char * argv[]) {
 			p.ExtractHeaderFromPayload<IPHeader>(IPHeader :: EstimateIPHeaderLength(p));
 			IPHeader p_ip = p.FindHeader(Headers :: IPHeader);
 
+			// Verify TCP checksum
+/*
+			if (!p_tcp.IsCorrectChecksum(p)) {
+				cout << "INCORRECT CHECKSUM" << endl;
+				break;		
+			}
+*/
 			// Copy contents of packet into convenient struct
 			PacketInfo p_in(p_ip, p_tcp);
 			p_in.printMsg("Received");
@@ -343,17 +351,26 @@ int main(int argc, char * argv[]) {
 						unsigned int lastRecvd = tcp_state->GetLastRecvd();
 						unsigned int lastAcked = tcp_state->GetLastAcked();
 						unsigned int lastSent = tcp_state->GetLastSent();
-
 						// Handle connection close
 						if (IS_FIN(p_in.flags)) {
 							cout << "Close request recvd" << endl;
 							tcp_state->SetState(CLOSE_WAIT);
 						} else if (p_in.buffer_len > 0){
-							// Write data to socket
-							tcp_state->RecvBuffer.AddBack(buffer);
-							SockRequestResponse response = SockRequestResponse(WRITE, conn, tcp_state->RecvBuffer, p_in.buffer_len, EOK);
-							MinetSend(sock, response);							
+							// Add new packet data to recv buffer
+							Buffer b(buffer);
+							char cb[p_in.buffer_len];
+							buffer.GetData(cb,p_in.buffer_len, 0);
+							b.SetData(cb, p_in.buffer_len, 0);
+							tcp_state->RecvBuffer.AddBack(b);	
+							cout << tcp_state->RecvBuffer.GetSize() << "B in recv buffer" << endl;
 						}
+
+						// Write data in recv buffer to socket
+						if (tcp_state->RecvBuffer.GetSize() > 0) {
+							SockRequestResponse response = SockRequestResponse(WRITE, conn, tcp_state->RecvBuffer, tcp_state->RecvBuffer.GetSize(), EOK);
+							MinetSend(sock, response);
+						}
+		
 
 						// Ack packet
 						{ 
@@ -362,7 +379,8 @@ int main(int argc, char * argv[]) {
 							unsigned int ack = p_in.seq + p_in.buffer_len; // Move ack fwd by data len recvd
 							unsigned int seq = p_in.ack; 
 							SET_ACK(flags);
-							p_send = createPacket(conn, buffer, flags, ack, seq, p_in.buffer_len); 	// Echo back buffer
+							Buffer b;
+							p_send = createPacket(conn, b, flags, ack, seq, 0); 
 							MinetSend(mux, p_send);
 							// Update state for sent packet
 							tcp_state->SetLastAcked(ack);
@@ -420,10 +438,13 @@ int main(int argc, char * argv[]) {
 				case LAST_ACK: {
 					cout << "MUX: LAST_ACK\n";
 					if (IS_ACK(p_in.flags)) {
-
 						// Close connection
-
 						conn_list.erase(conn_list_iterator);
+						// Send CLOSE to socket
+						SockRequestResponse response = SockRequestResponse();
+						response.connection = conn;
+						response.type = CLOSE;
+						MinetSend(sock, response);
 						cout << "Connection closed." << endl;	
 					}
 					break;
@@ -454,19 +475,16 @@ int main(int argc, char * argv[]) {
 				case TIME_WAIT: {
 					cout << "MUX: TIME_WAIT\n";
 					if(IS_FIN(p_in.flags)) {
-						
-						unsigned char flags = 0;
-						unsigned int ack = p_in.seq + p_in.buffer_len;
-						unsigned int seq = p_in.ack;
-						SET_ACK(flags);
-						p_send = createPacket(conn, buffer, flags, ack, seq, 0);
-						MinetSend(mux, p_send);
-						
-						//
 						// WAIT 30 SECS
-						//
 
+						// Remove connection
 						conn_list.erase(conn_list_iterator);
+						// Send CLOSE to socket
+						SockRequestResponse response = SockRequestResponse();
+						response.connection = conn;
+						response.bytes = 0;
+						response.type = CLOSE;
+						MinetSend(sock, response);
 					}
 
 
@@ -480,6 +498,7 @@ int main(int argc, char * argv[]) {
 	    if (event.handle == sock) {
 		/* Handle socket request or response */
 			SockRequestResponse request;
+			SockRequestResponse response;
 			MinetReceive(sock, request);
 
 			ConnectionList<TCPState>::iterator conn_list_iterator = conn_list.FindMatching(request.connection);
@@ -552,11 +571,17 @@ int main(int argc, char * argv[]) {
 					// Resend remaining bytes
 					case STATUS: {
 						cout << "SOCK: STATUS\n";
-						unsigned int remaining = request.data.GetSize();
-						if (remaining > 0) {
-							cout << "Sent remaining " << remaining << "B to socket" << endl;
-							// Use tcp state recv buffer here
+						// Handle any data that was written
+						if (request.bytes > 0) {
+							cout << "Sent " << request.bytes << "B to socket." << endl;
+							// Pop data from buffer that was successfully written in TCP Write
+							tcp_state->RecvBuffer.Erase(0, request.bytes);
+							unsigned int remaining = tcp_state->RecvBuffer.GetSize();
+							if (remaining > 0) {
+								cout << remaining << " remaining in recv buffer." << endl;
+							}
 						}
+
 						// Should be sent in response to TCP WRITEs
 						// THe connection should match that in WRITE
 						// Byte count reflects the number of bytes read from the WRITE
@@ -567,13 +592,10 @@ int main(int argc, char * argv[]) {
 					//	response.bytes = ??
 					//	response.error = EOK;
 					//	MinetSend(sock, response);
-
-
->>>>>>> f5324ca3e6c06b7e7496842c240fe965ed189543
 						break;
 					}
-					// Send data packet					
-					case WRITE:
+					// Push data from socket onto connection's output queue					
+					case WRITE: {
 						
 						cout << "SOCK: WRITE\n";
 						/*
@@ -591,18 +613,47 @@ int main(int argc, char * argv[]) {
 						// Update TCPState
 						tcp_state->SetLastAcked(ack);
 						tcp_state->SetLastSent(seq);
-				*/
-						// a STATUS with the same connection, no data, # bytes actually queued, & error
+						*/
+
+	
+
+						// Push data onto send buffer
+						unsigned int sendbytes = request.data.GetSize();
+						if (sendbytes <= TCP_MAXIMUM_SEGMENT_SIZE) {
+							tcp_state->SendBuffer.AddBack(request.data);
+						} else {
+							sendbytes = TCP_MAXIMUM_SEGMENT_SIZE;	
+							Buffer partialData = request.data.ExtractFront(sendbytes);
+							tcp_state->SendBuffer.AddBack(partialData);
+						}
+
+						// Send data in send buffer 
+						{
+							unsigned int lastRecvd = tcp_state->GetLastRecvd();
+							unsigned int lastSent = tcp_state->GetLastSent();
+							// Send packet
+							unsigned char flags = 0;
+							SET_ACK(flags);
+							unsigned int ack = lastRecvd;	
+							unsigned int seq = lastSent; 	
+							Packet send = createPacket(request.connection, tcp_state->SendBuffer, flags, ack, seq, sendbytes);
+							MinetSend(mux, send);
+							// Update TCPState
+							tcp_state->SetLastAcked(ack);
+							tcp_state->SetLastSent(seq + sendbytes);
+						}
+
+						// Send STATUS with the same connection, no data, # bytes actually queued, & error
 						response.type = STATUS;
 						response.connection = request.connection;
-						// response.bytes = ??
+						response.bytes = sendbytes;
 						response.error = EOK;
 						MinetSend(sock, response);
 
 						// Responsibility of Sock module to deal with WRITEs that actually write fewer than the required number of bytes
 						break;
 					}
-					case FORWARD:
+					case FORWARD: {
 						// DON'T NEED TO IMPLEMENT
 
 						cout << "SOCK: FORWARD\n";
@@ -614,11 +665,12 @@ int main(int argc, char * argv[]) {
 						response.error = EOK;
 
 						break;
+					}
 					// Send close request (client)
 					case CLOSE: {
 						cout << "SOCK: CLOSE\n";
 						unsigned int lastSent = tcp_state->GetLastSent();
-						unsigned int lastAck = tcp_state->GetLastAcked();'
+						unsigned int lastAck = tcp_state->GetLastAcked();
 						// New TCP state
 						tcp_state->SetState(FIN_WAIT1);
 						// Send FIN
